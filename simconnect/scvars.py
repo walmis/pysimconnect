@@ -10,7 +10,21 @@ from .scdefs import DATATYPE_INT32, DATATYPE_FLOAT64, DATATYPE_STRING256
 def validate_simvar(name: str, settable: bool) -> Optional[Dict[str, Any]]:
     """Match a simvar name and settable flag to known variables"""
     base = _namestd(name)
-    sv = SIMVARS.get(base, {})
+    if base == 'L':
+        sv = {
+            'name': {name},
+            'units': 'number',
+            'settable': True,
+            'url': '',
+            'page': 'LVARS',
+            'section': 'LVARS',
+            'name_std': {name},
+            'units_std': 'number',
+            'dimensions': 'Miscellaneous Units',
+            'indexed': False
+        }
+    else:
+        sv = SIMVARS.get(base, {})
     if not sv:
         logging.warning(f"SimConnect: unrecognized simvar '{base}', {_closemsg(base, SIMVARS)}")
     else:
