@@ -12,7 +12,7 @@ from .scdefs import (
     HANDLE, windll,
 )
 from .receiver import Receiver, ReceiverInstance, _default_receivers
-from .datadef import SimVarsSpec, DataDefinition, SimData, SimDataHandler, _norm_simvars, map_event_id
+from .datadef import SimVarsSpec, DataDefinition, SimData, SimDataHandler, _norm_simvars, map_event_id, clear_event_ids
 
 
 RECV_P = POINTER(RECV)
@@ -41,11 +41,13 @@ class SimConnect:
         try:
             self._decls['Open'](byref(self.hsc), name.encode('utf-8'), None, 0, 0, 0)
         except OSError:
-            logging.error("Failed to open SimConnect, is Flight Simulator running?")
+            logging.warning("Unable to connect to SimConnect, is MSFS Running?")
             raise
         self._reqid_iter = itertools.count()
         self._receivers: List[ReceiverInstance] = default_receivers[:]
         self.poll_interval_seconds = poll_interval_seconds
+        clear_event_ids() # clear any events that have been mapped
+        DataDefinition.reset() # clear any data defs that have been stored
 
     def __enter__(self):
         return self

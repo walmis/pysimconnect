@@ -76,6 +76,11 @@ class DataDefinition:
             kls._instances[key] = kls(sc, len(kls._instances), defs)
         return kls._instances[key]
 
+    @classmethod
+    def reset(kls):
+        # clears the data definition dictionary so stale entries are not maintained on a re-init
+        kls._instances.clear()
+
     def __init__(self, sc: 'SimConnect', def_id: int, defs: List[Dict[str, Any]]):
         self.id = def_id
         self.simdata: SimData = ChangeDict()
@@ -140,6 +145,10 @@ def map_event_id(sc: 'SimConnect', event: str) -> int:
         sc.MapClientEventToSimEvent(client_id, s)
     return client_id
 
+
+def clear_event_ids():
+    # Clears the event id dictionary so stale subscriptions are not maintained during a re-init
+    _event_ids.clear()
 
 # Track client-mapped event ids
 _event_ids: Dict[str, int] = {}
