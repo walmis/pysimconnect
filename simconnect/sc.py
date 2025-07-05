@@ -29,7 +29,8 @@ class SimConnect:
             name='pySimConnect',
             dll_path=_dll_path,
             default_receivers=_default_receivers,
-            poll_interval_seconds=0.05):
+            poll_interval_seconds=0.05,
+            log_warning=False):
         try:
             dll = windll.LoadLibrary(dll_path)
         except Exception:
@@ -41,7 +42,8 @@ class SimConnect:
         try:
             self._decls['Open'](byref(self.hsc), name.encode('utf-8'), None, 0, 0, 0)
         except OSError:
-            logging.warning("Unable to connect to SimConnect, is MSFS Running?")
+            if log_warning:
+                logging.warning(f"Unable to connect to SimConnect, is MSFS Running?")
             raise
         self._reqid_iter = itertools.count()
         self._receivers: List[ReceiverInstance] = default_receivers[:]
