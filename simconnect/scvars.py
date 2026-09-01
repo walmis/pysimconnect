@@ -137,7 +137,12 @@ def _eventstd(s):
 
 # Load SDK definitions scraped from documentation, see ../scripts/scrapevars.py
 try:
-    _scvars = json.load(open(os.path.join(os.path.dirname(__file__), 'scvars.json')))
+    # with-block, not a bare open(): the abandoned handle was otherwise
+    # garbage-collected at an arbitrary later moment, raising a
+    # ResourceWarning inside __del__ - which surfaces as a test error in
+    # any consumer running pytest with warnings-as-errors.
+    with open(os.path.join(os.path.dirname(__file__), 'scvars.json')) as f:
+        _scvars = json.load(f)
 except Exception:
     logging.warning('Failed to load scvars.json')
     _scvars = dict(SIMVARS={}, EVENTS={}, UNITS={}, DIMENSIONS={})
