@@ -1,5 +1,6 @@
-from typing import List, Optional, Type, Any
-from ctypes import byref, sizeof, cast, POINTER, c_void_p
+from typing import Callable, Dict, List, Optional, Type, Any, Union
+from dataclasses import dataclass
+from ctypes import byref, sizeof, cast, POINTER, c_void_p, c_double, create_string_buffer
 import itertools
 import logging
 import os
@@ -10,12 +11,31 @@ from .scdefs import (
     OBJECT_ID_USER, PERIOD_SECOND, PERIOD_ONCE,
     GROUP_PRIORITY_HIGHEST, EVENT_FLAG_GROUPID_IS_PRIORITY,
     HANDLE, windll,
+    RECV_ENUMERATE_INPUT_EVENTS, RECV_GET_INPUT_EVENT, RECV_SUBSCRIBE_INPUT_EVENT,
+    INPUT_EVENT_TYPE_DOUBLE, INPUT_EVENT_TYPE_STRING,
 )
 from .receiver import Receiver, ReceiverInstance, _default_receivers
 from .datadef import SimVarsSpec, DataDefinition, SimData, SimDataHandler, _norm_simvars, map_event_id, clear_event_ids
 
 
 RECV_P = POINTER(RECV)
+
+
+@dataclass(frozen=True)
+class InputEvent:
+    """One of the loaded aircraft's input events (a "B:" variable).
+
+    The sim addresses these by hash, not name, and the hashes are only
+    known after enumerate_input_events() - they can differ per aircraft.
+    """
+    name: str      # without the "B:" prefix
+    hash: int
+    type: int      # INPUT_EVENT_TYPE_DOUBLE or INPUT_EVENT_TYPE_STRING
+
+
+def input_event_name(name: str) -> str:
+    """An input event name as the sim enumerates it: the "B:" prefix removed."""
+    return name[2:] if name[:2].upper() == "B:" else name
 
 # to change the default logging, set the LOGLEVEL environment variable, e.g. LOGLEVEL=DEBUG
 logging.basicConfig(level=os.environ.get("LOGLEVEL", "INFO"))
@@ -50,6 +70,7 @@ class SimConnect:
         self.poll_interval_seconds = poll_interval_seconds
         clear_event_ids() # clear any events that have been mapped
         DataDefinition.reset() # clear any data defs that have been stored
+        self._input_events: Dict[str, InputEvent] = {}
 
     def __enter__(self):
         return self
@@ -78,10 +99,12 @@ class SimConnect:
         """
         self._receivers.append(ReceiverInstance(rtype, receiver))
 
-    def remove_receiver(self, receiver: Receiver) -> bool:
-        """Remove a receiver instance by id, return True if found"""
+    def remove_receiver(self, receiver) -> bool:
+        """Remove a receiver, given either the ReceiverInstance add_receiver
+        appended or the callable it wraps; True when one was found."""
         n = len(self._receivers)
-        self._receivers = [r for r in self._receivers if r._receiver == receiver]
+        self._receivers = [r for r in self._receivers
+                           if r is not receiver and r._receiver is not receiver]
         return len(self._receivers) < n
 
     def _dispatcher(self, pRecv, nSize, pContext):
@@ -206,3 +229,115 @@ class SimConnect:
             GROUP_PRIORITY_HIGHEST,
             EVENT_FLAG_GROUPID_IS_PRIORITY,
         )
+
+    # --- Input events: the loaded aircraft's "B:" variables -----------------
+    # Available from MSFS 2020 SU12 on.  Unlike simvars they are addressed
+    # by a per-aircraft hash, so every call below resolves a name through
+    # the table enumerate_input_events() filled in.
+
+    @property
+    def input_events(self) -> Dict[str, InputEvent]:
+        """The table from the last enumerate_input_events(), by name."""
+        return self._input_events
+
+    def resolve_input_event(self, event: Union[str, int, InputEvent]) -> int:
+        """The hash for an input event given by name ("B:" optional),
+        InputEvent, or hash.  KeyError when the name was not enumerated."""
+        if isinstance(event, InputEvent):
+            return event.hash
+        if isinstance(event, int):
+            return event
+        key = input_event_name(event)
+        if key not in self._input_events:
+            raise KeyError(f"input event {event!r} not found; enumerate_input_events() first")
+        return self._input_events[key].hash
+
+    def enumerate_input_events(self, timeout_seconds=2) -> Dict[str, InputEvent]:
+        """Ask the sim for the loaded aircraft's input events and wait for
+        the (possibly chunked) answer.  Replaces the cached table, so call
+        it again after an aircraft change."""
+        req_id = next(self._reqid_iter)
+        found: Dict[str, InputEvent] = {}
+        done = False
+
+        def receiver(recv: RECV_ENUMERATE_INPUT_EVENTS) -> bool:
+            nonlocal done
+            if recv.dwRequestID != req_id:
+                return False
+            for d in recv.descriptors():
+                name = d.Name.decode("utf-8", errors="replace")
+                found[name] = InputEvent(name, d.Hash, d.eType)
+            if recv.dwEntryNumber + 1 >= recv.dwOutOf:
+                done = True
+            return True
+
+        ri = ReceiverInstance(RECV_ENUMERATE_INPUT_EVENTS, receiver)
+        self._receivers.append(ri)
+        try:
+            self.EnumerateInputEvents(req_id)
+            tmax = time() + timeout_seconds
+            while not done and time() < tmax:
+                self.receive(tmax - time())
+        finally:
+            self._receivers.remove(ri)
+        self._input_events = found
+        return found
+
+    def get_input_event(self, event, timeout_seconds=1) -> Any:
+        """One-off read of an input event's value (float or str); None on
+        timeout.  For repeated reads prefer subscribe_input_event()."""
+        h = self.resolve_input_event(event)
+        req_id = next(self._reqid_iter)
+        result = []
+
+        def receiver(recv: RECV_GET_INPUT_EVENT) -> bool:
+            if recv.dwRequestID != req_id:
+                return False
+            result.append(recv.value)
+            return True
+
+        ri = ReceiverInstance(RECV_GET_INPUT_EVENT, receiver)
+        self._receivers.append(ri)
+        try:
+            self.GetInputEvent(req_id, h)
+            tmax = time() + timeout_seconds
+            while not result and time() < tmax:
+                self.receive(tmax - time())
+        finally:
+            self._receivers.remove(ri)
+        return result[0] if result else None
+
+    def set_input_event(self, event, value):
+        """Set an input event: a number is sent as a double, a str as a
+        NUL-terminated string."""
+        h = self.resolve_input_event(event)
+        if isinstance(value, str):
+            buf = create_string_buffer(value.encode("utf-8"))
+            self.SetInputEvent(h, sizeof(buf), cast(buf, c_void_p))
+        else:
+            d = c_double(float(value))
+            self.SetInputEvent(h, sizeof(d), cast(byref(d), c_void_p))
+
+    def subscribe_input_event(self, event, callback: Callable[[Any], None]) -> ReceiverInstance:
+        """Have the sim report every change of an input event; callback
+        receives the new value.  Returns the receiver, for
+        unsubscribe_input_event().  The sim sends changes only, so pair
+        with get_input_event() for the starting value."""
+        h = self.resolve_input_event(event)
+
+        def receiver(recv: RECV_SUBSCRIBE_INPUT_EVENT) -> bool:
+            if recv.Hash != h:
+                return False
+            callback(recv.value)
+            return True
+
+        ri = ReceiverInstance(RECV_SUBSCRIBE_INPUT_EVENT, receiver)
+        self._receivers.append(ri)
+        self.SubscribeInputEvent(h)
+        return ri
+
+    def unsubscribe_input_event(self, event, receiver: Optional[ReceiverInstance] = None):
+        h = self.resolve_input_event(event)
+        self.UnsubscribeInputEvent(h)
+        if receiver is not None:
+            self.remove_receiver(receiver)
