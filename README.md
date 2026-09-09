@@ -14,7 +14,10 @@ which exposes a simple pythonic interface
 to read simulator variables,
 set editable variables,
 subscribe to variable changes,
-and trigger simulator events.
+trigger simulator events,
+and enumerate, read, write and subscribe to the loaded aircraft's
+input events (`B:` variables, MSFS 2020 SU12 and later; see
+`examples/input_events.py`).
 It also exposes all of the low-level SDK methods,
 constants and enumerations from the `SimConnect.h`
 SDK API based on a simple automated translation
