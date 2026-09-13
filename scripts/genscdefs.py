@@ -153,7 +153,7 @@ def maybeStruct(line, lines, output) -> bool:
 
 # extern "C" HRESULT __attribute__((__stdcall__)) SimConnect_MapClientEventToSimEvent(HANDLE hSimConnect, ...
 def maybeDecl(line, lines, decls) -> bool:
-    m = re.match(r'extern\s+"C"\s+(.*?)\s+__attribute__\(\(__stdcall__\)\)\s+(\w+)\((.*?)\)', line)
+    m = re.match(r'extern\s+"C"\s+(.*?)\s+__attribute__\(\(__stdcall__\)\)\s+(\w+)\((.*)\)\s*;', line)
     if not m:
         return False
 
